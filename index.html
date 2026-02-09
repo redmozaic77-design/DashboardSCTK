@@ -1,18 +1,23 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>WATER DISTRIBUTION PERFORMANCE & WATER QUALITY DASHBOARD</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-  <!-- untuk GitHub/Netlify -->
-  <link rel="stylesheet" href="./static/style.css">
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- MQTT.js (WebSocket) -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+  <!-- Static CSS -->
+  <link rel="stylesheet" href="./static/style.css" />
 </head>
 
 <body data-theme="dark">
+
 <div class="topbar">
   <div class="topbarInner">
-    <!-- untuk GitHub/Netlify -->
     <img src="./static/logo-sctk-transparan.png" class="brandLogo" alt="Logo" />
     <span>WATER DISTRIBUTION PERFORMANCE & WATER QUALITY DASHBOARD</span>
   </div>
@@ -88,7 +93,9 @@
         <div class="hint" id="qcHint">QC LAST UPDATE: - | CHL: -</div>
       </div>
 
-      <!-- ================= JADWAL (Slide QC) ================= -->
+      <!-- NOTE: panel jadwal kamu sebelumnya dari /api/schedule (backend).
+           Karena sekarang full static, bagian jadwal ini akan selalu kosong
+           kecuali kamu buat sumber jadwal sendiri (misal JSON publik). -->
       <div class="panel schedulePanel">
         <div class="panelTitle">
           <div class="panelTitleLeft">
@@ -118,7 +125,7 @@
                   <tr><th>NAMA</th><th>JAM</th><th class="lokasi">LOKASI</th></tr>
                 </thead>
                 <tbody id="schBodyOp">
-                  <tr><td class="emptyRow" colspan="3">- Memuat data... -</td></tr>
+                  <tr><td class="emptyRow" colspan="3">- TIDAK ADA SUMBER DATA (STATIC) -</td></tr>
                 </tbody>
               </table>
             </div>
@@ -134,7 +141,7 @@
                   <tr><th>NAMA</th><th>JAM</th><th class="lokasi">LOKASI</th></tr>
                 </thead>
                 <tbody id="schBodyLab">
-                  <tr><td class="emptyRow" colspan="3">- Memuat data... -</td></tr>
+                  <tr><td class="emptyRow" colspan="3">- TIDAK ADA SUMBER DATA (STATIC) -</td></tr>
                 </tbody>
               </table>
             </div>
@@ -149,21 +156,22 @@
 
       <div class="grid">
 
-        <!-- NOTE: bagian ini sebelumnya pakai Jinja {{ ... }} & loop.
-             Sekarang dibuat statis supaya nggak error di Netlify.
-        -->
-
+        <!-- PRESSURE -->
         <div class="card">
           <div class="titleRow"><div class="title">PRESSURE DISTRIBUSI</div></div>
-          <div class="valueRow"><div class="big"><span id="val_PRESSURE_DST">0.00</span></div><div class="unit">BAR</div></div>
+          <div class="valueRow">
+            <div class="big"><span id="val_PRESSURE_DST">-</span></div>
+            <div class="unit">BAR</div>
+          </div>
           <div class="gaugeWrap" id="gaugeWrap"><canvas id="gauge_pressure" width="260" height="150"></canvas></div>
           <div class="rangeText">RANGE 0 - 5 BAR</div>
         </div>
 
+        <!-- RESERVOIR LEVEL -->
         <div class="card">
           <div class="titleRow"><div class="title">LEVEL RESERVOIR WTP 3</div></div>
           <div class="valueRow">
-            <div class="big"><span id="val_LVL_RES_WTP3">0.00</span></div>
+            <div class="big"><span id="val_LVL_RES_WTP3">-</span></div>
             <div class="unit">M</div>
             <div class="unit">(<span id="pct_LVL">0</span>%)</div>
           </div>
@@ -178,49 +186,50 @@
           </div>
         </div>
 
-        <!-- tiles (sesuai app.js kamu pakai canvas.spark + data-key) -->
-        <div class="card">
-          <div class="titleRow"><div class="title">TOTAL FLOW INTAKE</div></div>
-          <div class="valueRow"><div class="big"><span id="val_TOTAL_FLOW_ITK">0.00</span></div><div class="unit">LPS</div></div>
-          <div class="sparkWrap"><canvas class="spark" id="spark_TOTAL_FLOW_ITK" data-key="TOTAL_FLOW_ITK"></canvas></div>
-        </div>
-
+        <!-- Tiles (spark) -->
         <div class="card">
           <div class="titleRow"><div class="title">TOTAL FLOW DISTRIBUSI</div></div>
-          <div class="valueRow"><div class="big"><span id="val_TOTAL_FLOW_DST">0.00</span></div><div class="unit">LPS</div></div>
+          <div class="valueRow"><div class="big"><span id="val_TOTAL_FLOW_DST">-</span></div><div class="unit">L/s</div></div>
           <div class="sparkWrap"><canvas class="spark" id="spark_TOTAL_FLOW_DST" data-key="TOTAL_FLOW_DST"></canvas></div>
         </div>
 
         <div class="card">
-          <div class="titleRow"><div class="title">SELISIH TOTAL FLOW (INTAKE - DISTRIBUSI)</div></div>
-          <div class="valueRow"><div class="big"><span id="val_SELISIH_FLOW">0.00</span></div><div class="unit">LPS</div></div>
+          <div class="titleRow"><div class="title">TOTAL FLOW INTAKE</div></div>
+          <div class="valueRow"><div class="big"><span id="val_TOTAL_FLOW_ITK">-</span></div><div class="unit">L/s</div></div>
+          <div class="sparkWrap"><canvas class="spark" id="spark_TOTAL_FLOW_ITK" data-key="TOTAL_FLOW_ITK"></canvas></div>
+        </div>
+
+        <div class="card">
+          <div class="titleRow"><div class="title">SELISIH FLOW</div></div>
+          <div class="valueRow"><div class="big"><span id="val_SELISIH_FLOW">-</span></div><div class="unit">L/s</div></div>
           <div class="sparkWrap"><canvas class="spark" id="spark_SELISIH_FLOW" data-key="SELISIH_FLOW"></canvas></div>
         </div>
 
         <div class="card">
           <div class="titleRow"><div class="title">FLOW WTP 3</div></div>
-          <div class="valueRow"><div class="big"><span id="val_FLOW_WTP3">0.00</span></div><div class="unit">LPS</div></div>
+          <div class="valueRow"><div class="big"><span id="val_FLOW_WTP3">-</span></div><div class="unit">L/s</div></div>
           <div class="sparkWrap"><canvas class="spark" id="spark_FLOW_WTP3" data-key="FLOW_WTP3"></canvas></div>
         </div>
 
         <div class="card">
           <div class="titleRow"><div class="title">FLOW UPAM CIKANDE</div></div>
-          <div class="valueRow"><div class="big"><span id="val_FLOW_50_WTP1">0.00</span></div><div class="unit">LPS</div></div>
+          <div class="valueRow"><div class="big"><span id="val_FLOW_50_WTP1">-</span></div><div class="unit">L/s</div></div>
           <div class="sparkWrap"><canvas class="spark" id="spark_FLOW_50_WTP1" data-key="FLOW_50_WTP1"></canvas></div>
         </div>
 
         <div class="card">
           <div class="titleRow"><div class="title">FLOW UPAM CIJERUK</div></div>
-          <div class="valueRow"><div class="big"><span id="val_FLOW_CIJERUK">0.00</span></div><div class="unit">LPS</div></div>
+          <div class="valueRow"><div class="big"><span id="val_FLOW_CIJERUK">-</span></div><div class="unit">L/s</div></div>
           <div class="sparkWrap"><canvas class="spark" id="spark_FLOW_CIJERUK" data-key="FLOW_CIJERUK"></canvas></div>
         </div>
 
         <div class="card">
           <div class="titleRow"><div class="title">FLOW UPAM CARENANG</div></div>
-          <div class="valueRow"><div class="big"><span id="val_FLOW_CARENANG">0.00</span></div><div class="unit">LPS</div></div>
+          <div class="valueRow"><div class="big"><span id="val_FLOW_CARENANG">-</span></div><div class="unit">L/s</div></div>
           <div class="sparkWrap"><canvas class="spark" id="spark_FLOW_CARENANG" data-key="FLOW_CARENANG"></canvas></div>
         </div>
 
+        <!-- ESTIMASI -->
         <div class="card estCard">
           <div class="estTop">
             <div class="estTitleSmall">ESTIMASI CADANGAN AIR</div>
@@ -272,6 +281,9 @@
               <option value="PRESSURE_DST">PRESSURE DISTRIBUSI</option>
               <option value="LVL_RES_WTP3">LEVEL RESERVOIR WTP 3</option>
             </select>
+
+            <!-- Range dropdown masih boleh ada, tapi di versi static ini
+                 big chart dipenuhi dari rolling MQTT (bukan history server). -->
             <select id="qtyRange" class="dd">
               <option value="1" selected>1 JAM</option>
               <option value="12">12 JAM</option>
@@ -279,6 +291,7 @@
             </select>
           </div>
         </div>
+
         <div class="bigChartWrap"><canvas id="chartBig" class="big"></canvas></div>
         <div class="hint" id="lastUpdate">LAST UPDATE: -</div>
       </div>
@@ -287,13 +300,13 @@
   </div>
 </div>
 
+<!-- optional konstanta -->
 <script>
-  /* default konstanta (karena kita tidak pakai Jinja lagi) */
   window.RES_MAX_M = 8.0;
   window.RES_LITER_PER_M = 375000.0;
 </script>
 
-<!-- untuk GitHub/Netlify -->
+<!-- Static JS -->
 <script src="./static/app.js"></script>
 </body>
 </html>
