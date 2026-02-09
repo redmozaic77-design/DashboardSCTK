@@ -1,15 +1,43 @@
+// ==========================================================
+// FULL STATIC DASHBOARD:
+// - Kuantitas: MQTT over WebSocket (mqtt.js)
+// - QC: Google Sheets publish CSV
+// - NO backend (/api/*, /events) lagi
+// ==========================================================
+
+// ===================== KONFIG =====================
+// MQTT
+const TOPIC = "data/sctkiotserver/groupsctkiotserver/123";
+
+// coba beberapa kandidat (edit kalau kamu sudah tahu yang bener)
+const WS_CANDIDATES = [
+  "ws://103.217.145.168:8083/mqtt",
+  "ws://103.217.145.168:8083",
+  "ws://103.217.145.168:9001",
+  "wss://103.217.145.168:8084/mqtt",
+];
+
+const NUMERIC_KEYS = [
+  "PRESSURE_DST",
+  "LVL_RES_WTP3",
+  "TOTAL_FLOW_ITK",
+  "TOTAL_FLOW_DST",
+  "FLOW_WTP3",
+  "FLOW_50_WTP1",
+  "FLOW_CIJERUK",
+  "FLOW_CARENANG",
+];
+
+// QC CSV (publish CSV)
+const QC_CSV_URL =
+  "https://docs.google.com/spreadsheets/d/e/2PACX-1vSMKrU7GU9pisN4ihKgSqyC1bDuT1ia6kp-vKWrdUhvaPyX95ZqOBOFy8iBCpQieizqTBJ3R4wNmRII/pub?gid=2046456175&single=true&output=csv";
+const QC_PULL_INTERVAL_MS = 20000;
+
 // ======= konstanta dari backend (kalau tidak ada, fallback) =======
 const RES_MAX_M = Number(window.RES_MAX_M || 8.0);
 const RES_LITER_PER_M = Number(window.RES_LITER_PER_M || 375000.0);
 
-const SLIDE_INTERVAL_MS = 10000;
-let slideIndex = 0;
-let slideTimer = null;
-let isSlidePaused = false;
-
-let lastQtyTsApplied = 0;
-let lastQCSigApplied = "";
-
+// ===================== UTIL =====================
 function cssVar(name){ return getComputedStyle(document.body).getPropertyValue(name).trim(); }
 function clamp(x,a,b){ return Math.max(a, Math.min(b, x)); }
 function fmt(n, d=2){
@@ -24,15 +52,15 @@ function fmtTime(tsSec, withSec=false){
     : {hour:"2-digit", minute:"2-digit"}
   );
 }
-async function fetchJSON(url){
+async function fetchTextNoCache(url){
   const sep = url.includes("?") ? "&" : "?";
   const u = url + sep + "_=" + Date.now();
   const res = await fetch(u, { cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
-  return await res.json();
+  return await res.text();
 }
 
-// ===== THEME =====
+// ===================== THEME =====================
 function applyTheme(theme){
   document.body.dataset.theme = theme;
   localStorage.setItem("theme", theme);
@@ -58,7 +86,12 @@ function setChartDefaults(){
   Chart.defaults.font.family = "Inter, Arial";
 }
 
-// ===== Slider controls =====
+// ===================== SLIDER =====================
+const SLIDE_INTERVAL_MS = 10000;
+let slideIndex = 0;
+let slideTimer = null;
+let isSlidePaused = false;
+
 function setSlide(idx){
   slideIndex = (idx % 2 + 2) % 2;
   const slides = document.getElementById("slides");
@@ -139,14 +172,14 @@ function setupNavButtons(){
   }, { passive: true });
 }
 
-// ===== Reservoir labels =====
+// ===================== RESERVOIR =====================
 function buildReservoirLabels(){
   const labels = document.getElementById("lvl_labels");
   const major = document.getElementById("tank_major_lines");
   if (!labels || !major) return;
   labels.innerHTML = "";
   major.innerHTML = "";
-  const max = 8;
+  const max = RES_MAX_M;
   for (let m=0; m<=max; m++){
     const pct = (m / max) * 100;
     const el = document.createElement("div");
@@ -198,7 +231,7 @@ function updateReservoir(levelM, animate=true){
   }
 }
 
-// ===== Pressure Gauge =====
+// ===================== GAUGE =====================
 let gaugeChart = null;
 function ensureGauge(){
   const canvas = document.getElementById("gauge_pressure");
@@ -253,7 +286,7 @@ function updatePressureGauge(val, animate=true){
   });
 }
 
-// ===== Chart helpers =====
+// ===================== CHART HELPERS =====================
 const POP_ANIM = { duration: 650, easing: "easeOutQuart" };
 function yFromBaseline(ctx){
   const y = ctx.chart.scales?.y;
@@ -266,7 +299,7 @@ function yFromBaseline(ctx){
 }
 
 // ==========================================================
-// TILE KUANTITAS (spark)
+// KUANTITAS (spark + big chart) -> source: MQTT
 // ==========================================================
 const QTY_TILE_SHIFT_SEC = 10;
 const QTY_TILE_POINTS    = 18;
@@ -304,22 +337,8 @@ function createQtyTileChart(ctx, labels, data){
       animations: { y: { from: (ctx) => yFromBaseline(ctx) } },
       plugins: { legend: { display:false }, tooltip: { enabled:false } },
       scales: {
-        x: {
-          ticks: {
-            color: cssVar("--muted"),
-            font: { size: 10 },
-            autoSkip: true,
-            maxTicksLimit: 6,
-            maxRotation: 0,
-            minRotation: 0
-          },
-          title: { display: true, text: "Jam" },
-          grid: { color: cssVar("--grid"), display: true }
-        },
-        y: {
-          ticks: { color: cssVar("--muted"), font: { size: 10 }, maxTicksLimit: 6 },
-          grid: { color: cssVar("--grid"), display: true }
-        }
+        x: { grid: { color: cssVar("--grid"), display: true } },
+        y: { grid: { color: cssVar("--grid"), display: true } }
       }
     }
   });
@@ -341,30 +360,9 @@ function initQtyTileCharts(){
   }
 }
 
-async function initQtyTileHistory(){
-  const hours = 1;
-  const interval = QTY_TILE_SHIFT_SEC;
-
-  for (const key of qtyTileKeys){
-    try{
-      const arr = await fetchJSON(`/api/history/${key}?hours=${hours}&interval=${interval}&limit=${QTY_TILE_POINTS}`);
-      const s = ensureQtySeries(key);
-      s.labels = arr.map(p => fmtTime(p.ts, true));
-      s.data   = arr.map(p => p.value);
-      if (arr.length){
-        s.lastBucket = Math.floor(arr[arr.length-1].ts / QTY_TILE_SHIFT_SEC) * QTY_TILE_SHIFT_SEC;
-      } else {
-        s.lastBucket = null;
-      }
-      renderQtyTile(key);
-    }catch(e){
-      console.log("INIT QTY TILE ERR", key, e);
-    }
-  }
-}
-
-// ===== Big chart kuantitas =====
+// Big chart kuantitas (pakai data rolling dari MQTT)
 let qtyChart = null;
+let qtyBigSeries = { labels: [], data: [], lastBucket: null };
 function qtyLabel(key){
   const map = {
     "TOTAL_FLOW_DST":"TOTAL FLOW DISTRIBUSI",
@@ -380,46 +378,233 @@ function qtyLabel(key){
   return map[key] || key;
 }
 
-async function loadQtyBig(animate=true){
-  const key = document.getElementById("qtyParam").value;
-  const hours = Number(document.getElementById("qtyRange").value);
-  const interval = (hours <= 1) ? 60 : (hours <= 12 ? 120 : 300);
-  const arr = await fetchJSON(`/api/history/${key}?hours=${hours}&interval=${interval}`);
+function ensureQtyBigChart(){
+  const canvas = document.getElementById("chartBig");
+  if (!canvas || !window.Chart) return;
+  const ctx = canvas.getContext("2d");
+  if (qtyChart) return;
 
-  const ctx = document.getElementById("chartBig").getContext("2d");
-  if (qtyChart) qtyChart.destroy();
   qtyChart = new Chart(ctx, {
     type: "line",
-    data: {
-      labels: arr.map(p => fmtTime(p.ts, false)),
-      datasets: [{
-        label: `${qtyLabel(key)} - ${hours} JAM`,
-        data: arr.map(p => p.value),
-        borderColor: cssVar("--accent"),
-        backgroundColor: cssVar("--accentFill"),
-        fill: true,
-        pointRadius: 0,
-        borderWidth: 2,
-        tension: 0.30
-      }]
-    },
+    data: { labels: [], datasets: [{
+      label: "DATA",
+      data: [],
+      borderColor: cssVar("--accent"),
+      backgroundColor: cssVar("--accentFill"),
+      fill: true,
+      pointRadius: 0,
+      borderWidth: 2,
+      tension: 0.30
+    }]},
     options: {
       responsive:true,
       maintainAspectRatio:false,
-      animation: animate ? POP_ANIM : false,
-      animations: animate ? { y: { from: (ctx) => yFromBaseline(ctx) } } : {},
+      animation: POP_ANIM,
+      animations: { y: { from: (ctx) => yFromBaseline(ctx) } },
       scales: {
-        x: { title: { display: true, text: "Jam" }, grid: { color: cssVar("--grid"), display:true } },
+        x: { grid: { color: cssVar("--grid"), display:true } },
         y: { grid: { color: cssVar("--grid"), display:true } }
       }
     }
   });
 }
 
-// ===== QC mini sparks =====
+function pushQtyBigPoint(tsSec, key, value){
+  ensureQtyBigChart();
+  if (!qtyChart) return;
+
+  // bucket per 10 detik supaya smooth tapi gak kebanyakan
+  const bucket = Math.floor(tsSec / 10) * 10;
+  const label = fmtTime(bucket, true);
+
+  const isNewBucket = (qtyBigSeries.lastBucket !== bucket);
+  if (isNewBucket){
+    qtyBigSeries.labels.push(label);
+    qtyBigSeries.data.push(value);
+    qtyBigSeries.lastBucket = bucket;
+    // keep max ~ 300 points
+    while (qtyBigSeries.labels.length > 300){
+      qtyBigSeries.labels.shift();
+      qtyBigSeries.data.shift();
+    }
+  } else {
+    if (qtyBigSeries.data.length) qtyBigSeries.data[qtyBigSeries.data.length - 1] = value;
+  }
+
+  const selKey = document.getElementById("qtyParam")?.value || key;
+  qtyChart.data.labels = [...qtyBigSeries.labels];
+  qtyChart.data.datasets[0].data = [...qtyBigSeries.data];
+  qtyChart.data.datasets[0].label = `${qtyLabel(selKey)} (MQTT)`;
+  qtyChart.update();
+}
+
+// =========================
+// ESTIMASI CADANGAN
+// =========================
+function secondsToHuman(sec){
+  if (sec == null || !isFinite(sec)) return "-";
+  if (sec < 0) return "-";
+  if (sec < 60) return Math.round(sec) + " dtk";
+  const m = Math.floor(sec/60);
+  const h = Math.floor(m/60);
+  const mm = m % 60;
+  if (h <= 0) return mm + " menit";
+  return h + " jam " + mm + " menit";
+}
+function computeEtaSeconds(levelM, netLps, targetM){
+  const lvl = Number(levelM);
+  const net = Number(netLps);
+  if (!isFinite(lvl) || !isFinite(net)) return null;
+  if (Math.abs(net) < 0.2) return null;
+
+  const rate_m_per_s = net / RES_LITER_PER_M;
+  const delta = targetM - lvl;
+
+  if ((delta > 0 && rate_m_per_s <= 0) || (delta < 0 && rate_m_per_s >= 0)) return null;
+  return delta / rate_m_per_s;
+}
+function setTrendUI(net){
+  const icon = document.getElementById("trendIcon");
+  const text = document.getElementById("trendText");
+  const sub = document.getElementById("netStateSub");
+
+  const upSvg = '<svg viewBox="0 0 24 24"><path d="M12 4l7 7h-4v9H9v-9H5z"/></svg>';
+  const dnSvg = '<svg viewBox="0 0 24 24"><path d="M12 20l-7-7h4V4h6v9h4z"/></svg>';
+  const flSvg = '<svg viewBox="0 0 24 24"><path d="M4 12h16v2H4z"/></svg>';
+
+  icon?.classList.remove("trUp","trDown","trFlat");
+
+  if (net > 0.2){
+    icon?.classList.add("trUp");
+    if (icon) icon.innerHTML = upSvg;
+    if (text) text.textContent = "CADANGAN NAIK";
+    if (sub) sub.textContent = "NAIK";
+  } else if (net < -0.2){
+    icon?.classList.add("trDown");
+    if (icon) icon.innerHTML = dnSvg;
+    if (text) text.textContent = "CADANGAN TURUN";
+    if (sub) sub.textContent = "TURUN";
+  } else {
+    icon?.classList.add("trFlat");
+    if (icon) icon.innerHTML = flSvg;
+    if (text) text.textContent = "STABIL";
+    if (sub) sub.textContent = "STABIL";
+  }
+}
+function updateEstimationUI(levelM, netLps){
+  const lvl = clamp(Number(levelM)||0, 0, RES_MAX_M);
+  const net = Number(netLps)||0;
+  const pct = Math.round((lvl / RES_MAX_M) * 100);
+
+  document.getElementById("est_level_m") && (document.getElementById("est_level_m").textContent = fmt(lvl, 2));
+  document.getElementById("est_level_pct") && (document.getElementById("est_level_pct").textContent = String(pct));
+  document.getElementById("est_net_lps") && (document.getElementById("est_net_lps").textContent = fmt(net, 2));
+  document.getElementById("est_fill") && (document.getElementById("est_fill").style.width = pct + "%");
+
+  setTrendUI(net);
+
+  const etaLabel = document.getElementById("est_eta_label");
+  const etaValue = document.getElementById("est_eta_value");
+
+  if (Math.abs(net) < 0.2){
+    if (etaLabel) etaLabel.textContent = "ETA";
+    if (etaValue) etaValue.textContent = "- (net hampir nol)";
+    return;
+  }
+
+  if (net < -0.2){
+    const eta1 = computeEtaSeconds(lvl, net, 1.0);
+    if (etaLabel) etaLabel.textContent = "ETA ke 1m";
+    if (etaValue) etaValue.textContent = (eta1 == null) ? "- (tidak menuju 1m)" : secondsToHuman(eta1);
+  } else {
+    const eta8 = computeEtaSeconds(lvl, net, 8.0);
+    if (etaLabel) etaLabel.textContent = "ETA ke 100%";
+    if (etaValue) etaValue.textContent = (eta8 == null) ? "- (tidak menuju penuh)" : secondsToHuman(eta8);
+  }
+}
+
+function applySelisihColor(v){
+  const el = document.getElementById("val_SELISIH_FLOW");
+  if (!el) return;
+  el.classList.remove("valPos","valNeg");
+  const n = Number(v);
+  if (!isFinite(n)) return;
+  if (n > 0) el.classList.add("valPos");
+  else if (n < 0) el.classList.add("valNeg");
+}
+
+// ===================== APPLY QTY FROM MQTT =====================
+let lastQtyTsApplied = 0;
+
+function applyQtyFromMQTT(data){
+  const ts = Math.floor(Date.now()/1000);
+  const isNew = (ts && ts > lastQtyTsApplied);
+
+  // update lastUpdate label
+  const lastUpdate = document.getElementById("lastUpdate");
+  if (lastUpdate) lastUpdate.textContent = "LAST UPDATE: " + new Date(ts*1000).toLocaleString();
+
+  // render angka
+  for (const [k,v] of Object.entries(data)){
+    const el = document.getElementById("val_" + k);
+    if (el) el.textContent = fmt(v, 2);
+  }
+
+  applySelisihColor(data.SELISIH_FLOW);
+  updateReservoir(data.LVL_RES_WTP3, isNew);
+  updatePressureGauge(data.PRESSURE_DST, isNew);
+  updateEstimationUI(data.LVL_RES_WTP3, data.SELISIH_FLOW);
+
+  // spark tiles
+  if (ts){
+    const bucket = Math.floor(ts / QTY_TILE_SHIFT_SEC) * QTY_TILE_SHIFT_SEC;
+    const label = fmtTime(bucket, true);
+
+    for (const key of qtyTileKeys){
+      const v = Number(data[key]);
+      if(!isFinite(v)) continue;
+
+      const s = ensureQtySeries(key);
+      const isNewBucket = (s.lastBucket !== bucket);
+
+      if (isNewBucket){
+        s.labels.push(label);
+        s.data.push(v);
+        s.lastBucket = bucket;
+        while (s.labels.length > QTY_TILE_POINTS){
+          s.labels.shift();
+          s.data.shift();
+        }
+      } else {
+        if (s.data.length) s.data[s.data.length - 1] = v;
+        else { s.labels.push(label); s.data.push(v); }
+      }
+
+      const ch = qtyTileCharts[key];
+      if (ch){
+        ch.options.animation = isNewBucket ? POP_ANIM : { duration: 180, easing: "linear" };
+        ch.data.labels = [...s.labels];
+        ch.data.datasets[0].data = [...s.data];
+        ch.update();
+      }
+    }
+
+    // big chart current selected param
+    const selKey = document.getElementById("qtyParam")?.value || "TOTAL_FLOW_DST";
+    const selVal = Number(data[selKey]);
+    if (isFinite(selVal)) pushQtyBigPoint(ts, selKey, selVal);
+  }
+
+  lastQtyTsApplied = ts;
+}
+
+// ==========================================================
+// QC: ambil dari CSV Google Sheets (tanpa backend)
+// ==========================================================
 const qcTileKeys = ["kekeruhan","warna","ph","sisa_chlor"];
 const qcTileCharts = {};
 const qcTileSeries = {};
+let qcBigChart = null;
 
 function ensureQCTileSeries(k){
   if (!qcTileSeries[k]) qcTileSeries[k] = { labels: [], data: [] };
@@ -468,51 +653,180 @@ function initQCTileCharts(){
   }
 }
 
-async function refreshQCTileCharts(){
-  for (const k of qcTileKeys){
-    try{
-      const arr = await fetchJSON(`/api/qc/last/${k}?n=5`);
-      const s = ensureQCTileSeries(k);
-      s.labels = arr.map(p => fmtTime(p.ts, false));
-      s.data   = arr.map(p => p.value);
-      renderQCTile(k);
-    }catch(e){
-      console.log("QC TILE REFRESH ERR", k, e);
-    }
-  }
-}
-
-// ===== QC big chart =====
-let qcBigChart = null;
 function qcLabel(k){
   const map = {kekeruhan:"KEKERUHAN", warna:"WARNA", ph:"PH", sisa_chlor:"SISA CHLOR"};
   return map[k] || k;
 }
-async function loadQCBig(animate=true){
-  const param = document.getElementById("qcParam").value;
-  const hours = Number(document.getElementById("qcRange").value);
-  const interval = (hours <= 24) ? 3600 : (hours <= 168 ? 7200 : 21600);
-  const arr = await fetchJSON(`/api/qc/history/${param}?hours=${hours}&interval=${interval}`);
 
-  const ctx = document.getElementById("qcBig").getContext("2d");
-  if (qcBigChart) qcBigChart.destroy();
+function parseCSV(text){
+  // parser CSV sederhana (cukup buat google publish csv)
+  const lines = text.split(/\r?\n/).filter(x => x.trim() !== "");
+  if (!lines.length) return { headers: [], rows: [] };
+
+  const splitLine = (line) => {
+    const out = [];
+    let cur = "";
+    let inQ = false;
+    for (let i=0;i<line.length;i++){
+      const ch = line[i];
+      if (ch === '"'){ inQ = !inQ; continue; }
+      if (ch === "," && !inQ){
+        out.push(cur);
+        cur = "";
+      } else cur += ch;
+    }
+    out.push(cur);
+    return out.map(s => s.trim());
+  };
+
+  const headers = splitLine(lines[0]);
+  const rows = [];
+  for (let i=1;i<lines.length;i++){
+    const cols = splitLine(lines[i]);
+    const obj = {};
+    headers.forEach((h, idx) => obj[h] = cols[idx] ?? "");
+    rows.push(obj);
+  }
+  return { headers, rows };
+}
+
+function toFloat(v){
+  if (v == null) return null;
+  const s = String(v).trim().replace(",", ".");
+  if (!s) return null;
+  const n = Number(s);
+  return isFinite(n) ? n : null;
+}
+
+function pickHeader(headers, candidates){
+  const norm = (s) => String(s||"").toLowerCase().replace(/\s+/g,"").replace("\ufeff","");
+  const hmap = {};
+  headers.forEach(h => hmap[norm(h)] = h);
+  for (const c of candidates){
+    const k = norm(c);
+    if (hmap[k]) return hmap[k];
+  }
+  // contains match
+  for (const c of candidates){
+    const k = norm(c);
+    for (const hk of Object.keys(hmap)){
+      if (hk.includes(k)) return hmap[hk];
+    }
+  }
+  return null;
+}
+
+function parseDT(s){
+  if (!s) return null;
+  const t = String(s).trim();
+  // coba Date.parse
+  const d = new Date(t);
+  if (!isNaN(d.getTime())) return d;
+  return null;
+}
+
+let qcRows = [];
+let qcLastUpdate = "-";
+let qcLastChlorUpdate = "-";
+
+async function pullQCOnce(){
+  try{
+    const text = await fetchTextNoCache(QC_CSV_URL);
+    const { headers, rows } = parseCSV(text);
+    if (!rows.length) return;
+
+    const dtCol = pickHeader(headers, ["DateTime","Datetime","DATE TIME","Date Time","Tanggal","Waktu"]);
+    const kekCol = pickHeader(headers, ["Kekeruhan"]);
+    const warCol = pickHeader(headers, ["Warna"]);
+    const phCol  = pickHeader(headers, ["pH","PH"]);
+    const chlCol = pickHeader(headers, ["Sisa Chlor","SisaChlor","Chlor"]);
+
+    const parsed = [];
+    for (const r of rows){
+      const dtObj = parseDT(dtCol ? r[dtCol] : null);
+      if (!dtObj) continue;
+      const ts = Math.floor(dtObj.getTime()/1000);
+      parsed.push({
+        ts,
+        dt: dtObj.toLocaleString(),
+        kekeruhan: toFloat(kekCol ? r[kekCol] : null),
+        warna: toFloat(warCol ? r[warCol] : null),
+        ph: toFloat(phCol ? r[phCol] : null),
+        sisa_chlor: toFloat(chlCol ? r[chlCol] : null),
+      });
+    }
+    parsed.sort((a,b)=>a.ts-b.ts);
+    qcRows = parsed;
+
+    // update latest per param
+    const latest = {};
+    for (const k of qcTileKeys){
+      latest[k] = { ts: null, dt: "-", value: null };
+      for (let i=qcRows.length-1;i>=0;i--){
+        if (qcRows[i][k] != null){
+          latest[k] = { ts: qcRows[i].ts, dt: qcRows[i].dt, value: qcRows[i][k] };
+          break;
+        }
+      }
+    }
+
+    // last update label
+    qcLastUpdate = latest.kekeruhan.ts || latest.warna.ts || latest.ph.ts
+      ? new Date(Math.max(latest.kekeruhan.ts||0, latest.warna.ts||0, latest.ph.ts||0)*1000).toLocaleString()
+      : "-";
+    qcLastChlorUpdate = latest.sisa_chlor.ts ? new Date(latest.sisa_chlor.ts*1000).toLocaleString() : "-";
+
+    // apply to UI
+    const hint = document.getElementById("qcHint");
+    if (hint){
+      hint.textContent = `QC LAST UPDATE: ${qcLastUpdate} | CHL: ${qcLastChlorUpdate}`;
+    }
+
+    for (const k of qcTileKeys){
+      const vEl = document.getElementById("qc_val_" + k);
+      const dEl = document.getElementById("qc_dt_" + k);
+      const obj = latest[k];
+      if (vEl) vEl.textContent = (obj.value == null) ? "-" : fmt(obj.value, 2);
+      if (dEl) dEl.textContent = obj.dt || "-";
+    }
+
+    // mini sparks (last 5 points)
+    for (const k of qcTileKeys){
+      const pts = qcRows.filter(r => r[k] != null).slice(-5);
+      const s = ensureQCTileSeries(k);
+      s.labels = pts.map(p => fmtTime(p.ts,false));
+      s.data = pts.map(p => p[k]);
+      renderQCTile(k);
+    }
+
+    // big QC chart
+    loadQCBig(true);
+
+  }catch(e){
+    console.log("QC pull error", e);
+  }
+}
+
+function ensureQCBigChart(){
+  const canvas = document.getElementById("qcBig");
+  if (!canvas || !window.Chart) return;
+  const ctx = canvas.getContext("2d");
+  if (qcBigChart) return;
+
   qcBigChart = new Chart(ctx, {
     type:"line",
-    data:{
-      labels: arr.map(p => new Date(p.ts*1000).toLocaleString()),
-      datasets:[{
-        label: `${qcLabel(param)} - ${hours<=24 ? hours+" JAM" : (hours/24)+" HARI"}`,
-        data: arr.map(p => p.value),
-        borderColor: cssVar("--accent"),
-        backgroundColor: cssVar("--accentFill"),
-        fill:true, pointRadius:0, borderWidth:2, tension:0.30
-      }]
-    },
+    data:{ labels: [], datasets:[{
+      label: "QC",
+      data: [],
+      borderColor: cssVar("--accent"),
+      backgroundColor: cssVar("--accentFill"),
+      fill:true, pointRadius:0, borderWidth:2, tension:0.30
+    }]},
     options:{
       responsive:true,
       maintainAspectRatio:false,
-      animation: animate ? POP_ANIM : false,
-      animations: animate ? { y: { from: (ctx) => yFromBaseline(ctx) } } : {},
+      animation: POP_ANIM,
+      animations: { y: { from: (ctx) => yFromBaseline(ctx) } },
       scales: {
         x: { grid: { color: cssVar("--grid"), display:true } },
         y: { grid: { color: cssVar("--grid"), display:true } }
@@ -521,344 +835,165 @@ async function loadQCBig(animate=true){
   });
 }
 
-// =========================
-// ESTIMASI CADANGAN
-// =========================
-function secondsToHuman(sec){
-  if (sec == null || !isFinite(sec)) return "-";
-  if (sec < 0) return "-";
-  if (sec < 60) return Math.round(sec) + " dtk";
-  const m = Math.floor(sec/60);
-  const h = Math.floor(m/60);
-  const mm = m % 60;
-  if (h <= 0) return mm + " menit";
-  return h + " jam " + mm + " menit";
+function loadQCBig(animate=true){
+  ensureQCBigChart();
+  if (!qcBigChart) return;
+
+  const param = document.getElementById("qcParam")?.value || "kekeruhan";
+  const hours = Number(document.getElementById("qcRange")?.value || 24);
+
+  const now = Math.floor(Date.now()/1000);
+  const start = now - Math.floor(hours*3600);
+
+  const pts = qcRows.filter(r => r.ts >= start && r[param] != null);
+  qcBigChart.data.labels = pts.map(p => new Date(p.ts*1000).toLocaleString());
+  qcBigChart.data.datasets[0].data = pts.map(p => p[param]);
+  qcBigChart.data.datasets[0].label = `${qcLabel(param)} - ${hours<=24 ? hours+" JAM" : (hours/24)+" HARI"}`;
+
+  qcBigChart.options.animation = animate ? POP_ANIM : false;
+  qcBigChart.update();
 }
 
-function computeEtaSeconds(levelM, netLps, targetM){
-  const lvl = Number(levelM);
-  const net = Number(netLps);
-  if (!isFinite(lvl) || !isFinite(net)) return null;
-  if (Math.abs(net) < 0.2) return null;
+// ===================== MQTT CONNECT =====================
+let mqttClient = null;
+let wsTryIndex = 0;
 
-  const rate_m_per_s = net / RES_LITER_PER_M;
-  const delta = targetM - lvl;
-
-  if ((delta > 0 && rate_m_per_s <= 0) || (delta < 0 && rate_m_per_s >= 0)) return null;
-  return delta / rate_m_per_s;
-}
-
-function setTrendUI(net){
-  const icon = document.getElementById("trendIcon");
-  const text = document.getElementById("trendText");
-  const sub = document.getElementById("netStateSub");
-
-  const upSvg = '<svg viewBox="0 0 24 24"><path d="M12 4l7 7h-4v9H9v-9H5z"/></svg>';
-  const dnSvg = '<svg viewBox="0 0 24 24"><path d="M12 20l-7-7h4V4h6v9h4z"/></svg>';
-  const flSvg = '<svg viewBox="0 0 24 24"><path d="M4 12h16v2H4z"/></svg>';
-
-  icon.classList.remove("trUp","trDown","trFlat");
-
-  if (net > 0.2){
-    icon.classList.add("trUp");
-    icon.innerHTML = upSvg;
-    if (text) text.textContent = "CADANGAN NAIK";
-    if (sub) sub.textContent = "NAIK";
-  } else if (net < -0.2){
-    icon.classList.add("trDown");
-    icon.innerHTML = dnSvg;
-    if (text) text.textContent = "CADANGAN TURUN";
-    if (sub) sub.textContent = "TURUN";
-  } else {
-    icon.classList.add("trFlat");
-    icon.innerHTML = flSvg;
-    if (text) text.textContent = "STABIL";
-    if (sub) sub.textContent = "STABIL";
-  }
-}
-
-function updateEstimationUI(levelM, netLps){
-  const lvl = clamp(Number(levelM)||0, 0, RES_MAX_M);
-  const net = Number(netLps)||0;
-  const pct = Math.round((lvl / RES_MAX_M) * 100);
-
-  document.getElementById("est_level_m").textContent = fmt(lvl, 2);
-  document.getElementById("est_level_pct").textContent = String(pct);
-  document.getElementById("est_net_lps").textContent = fmt(net, 2);
-  document.getElementById("est_fill").style.width = pct + "%";
-
-  setTrendUI(net);
-
-  const etaLabel = document.getElementById("est_eta_label");
-  const etaValue = document.getElementById("est_eta_value");
-
-  if (Math.abs(net) < 0.2){
-    if (etaLabel) etaLabel.textContent = "ETA";
-    if (etaValue) etaValue.textContent = "- (net hampir nol)";
-    return;
-  }
-
-  if (net < -0.2){
-    const eta1 = computeEtaSeconds(lvl, net, 1.0);
-    if (etaLabel) etaLabel.textContent = "ETA ke 1m";
-    if (etaValue) etaValue.textContent = (eta1 == null) ? "- (tidak menuju 1m)" : secondsToHuman(eta1);
-  } else {
-    const eta8 = computeEtaSeconds(lvl, net, 8.0);
-    if (etaLabel) etaLabel.textContent = "ETA ke 100%";
-    if (etaValue) etaValue.textContent = (eta8 == null) ? "- (tidak menuju penuh)" : secondsToHuman(eta8);
-  }
-}
-
-function applySelisihColor(v){
-  const el = document.getElementById("val_SELISIH_FLOW");
-  if (!el) return;
-  el.classList.remove("valPos","valNeg");
-  const n = Number(v);
-  if (!isFinite(n)) return;
-  if (n > 0) el.classList.add("valPos");
-  else if (n < 0) el.classList.add("valNeg");
-}
-
-// ===== Apply data to UI =====
-function applyQty(payload){
-  if (!payload) return;
-  const ts = payload.ts || 0;
-  const data = payload.data || {};
-
-  const isNew = (ts && ts > lastQtyTsApplied);
-
-  if (ts) {
-    document.getElementById("lastUpdate").textContent =
-      "LAST UPDATE: " + new Date(ts*1000).toLocaleString();
-  }
-
-  for (const [k,v] of Object.entries(data)){
-    const id = "val_" + k;
-    const el = document.getElementById(id);
-    if (el) el.textContent = fmt(v, 2);
-  }
-
-  applySelisihColor(data.SELISIH_FLOW);
-
-  updateReservoir(data.LVL_RES_WTP3, isNew);
-  updatePressureGauge(data.PRESSURE_DST, isNew);
-
-  updateEstimationUI(data.LVL_RES_WTP3, data.SELISIH_FLOW);
-
-  if (ts){
-    const bucket = Math.floor(ts / 10) * 10;
-    const label = fmtTime(bucket, true);
-
-    for (const key of qtyTileKeys){
-      const v = Number(data[key]);
-      if(!isFinite(v)) continue;
-
-      const s = ensureQtySeries(key);
-      const isNewBucket = (s.lastBucket !== bucket);
-
-      if (isNewBucket){
-        s.labels.push(label);
-        s.data.push(v);
-        s.lastBucket = bucket;
-        while (s.labels.length > 18){
-          s.labels.shift();
-          s.data.shift();
-        }
-      } else {
-        if (s.data.length) s.data[s.data.length - 1] = v;
-        else { s.labels.push(label); s.data.push(v); }
-      }
-
-      const ch = qtyTileCharts[key];
-      if (ch){
-        ch.options.animation = isNewBucket ? POP_ANIM : { duration: 180, easing: "linear" };
-        ch.data.labels = [...s.labels];
-        ch.data.datasets[0].data = [...s.data];
-        ch.update();
-      } else {
-        renderQtyTile(key);
-      }
-    }
-  }
-
-  if (isNew){
-    loadQtyBig(true);
-    lastQtyTsApplied = ts;
-  }
-}
-
-function applyQC(payload){
-  if (!payload) return;
-
-  document.getElementById("qcHint").textContent =
-    `QC LAST UPDATE: ${payload.qc_last_update || "-"} | CHL: ${payload.chlor_last_update || "-"}`;
-
-  const sig = JSON.stringify({
-    u: payload.qc_last_update,
-    c: payload.chlor_last_update,
-    k: payload.latest?.kekeruhan?.value,
-    s: payload.latest?.sisa_chlor?.value
-  });
-  const isNewQC = (sig !== lastQCSigApplied);
-
-  for (const k of qcTileKeys){
-    const vEl = document.getElementById("qc_val_" + k);
-    const dEl = document.getElementById("qc_dt_" + k);
-    const obj = (payload.latest && payload.latest[k]) ? payload.latest[k] : null;
-
-    const val = (obj && obj.value != null) ? obj.value : null;
-    if (vEl){
-      vEl.textContent = (val == null) ? "-" : fmt(val, 2);
-    }
-    if (dEl) dEl.textContent = (obj && obj.dt) ? obj.dt : "-";
-  }
-
-  if (isNewQC){
-    lastQCSigApplied = sig;
-    refreshQCTileCharts();
-    loadQCBig(true);
-  }
-}
-
-// ===== JADWAL (Slide QC) =====
-function ymd(d){
-  const pad = (n)=> String(n).padStart(2,"0");
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-}
-function setSchDateInput(val){
-  const inp = document.getElementById("schDate");
-  if (inp) inp.value = val;
-}
-function renderScheduleRows(tbodyId, rows){
-  const tb = document.getElementById(tbodyId);
-  if (!tb) return;
-  tb.innerHTML = "";
-  if (!rows || !rows.length){
-    tb.innerHTML = `<tr><td class="emptyRow" colspan="3">- TIDAK ADA DATA -</td></tr>`;
-    return;
-  }
-  for (const r of rows){
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${(r.nama||"-")}</td>
-      <td>${(r.jam||"-")}</td>
-      <td class="lokasi">${(r.lokasi||"-")}</td>
-    `;
-    tb.appendChild(tr);
-  }
-}
-async function loadSchedule(dateStr){
-  try{
-    const j = await fetchJSON(`/api/schedule?date=${encodeURIComponent(dateStr)}`);
-    renderScheduleRows("schBodyOp", j.operator || []);
-    renderScheduleRows("schBodyLab", j.lab || []);
-  }catch(e){
-    renderScheduleRows("schBodyOp", []);
-    renderScheduleRows("schBodyLab", []);
-    console.log("SCHEDULE LOAD ERR", e);
-  }
-}
-function initSchedule(){
-  const today = new Date();
-  const d0 = ymd(today);
-  setSchDateInput(d0);
-  loadSchedule(d0);
-
-  const btnT = document.getElementById("schToday");
-  const btnB = document.getElementById("schTomorrow");
-  const inp  = document.getElementById("schDate");
-
-  if (btnT) btnT.addEventListener("click", () => {
-    const d = ymd(new Date());
-    setSchDateInput(d);
-    loadSchedule(d);
-  });
-  if (btnB) btnB.addEventListener("click", () => {
-    const x = new Date();
-    x.setDate(x.getDate()+1);
-    const d = ymd(x);
-    setSchDateInput(d);
-    loadSchedule(d);
-  });
-  if (inp) inp.addEventListener("change", () => {
-    const d = inp.value;
-    if (d) loadSchedule(d);
-  });
-
-  // refresh tiap 5 menit
-  setInterval(() => {
-    const d = (document.getElementById("schDate")?.value) || ymd(new Date());
-    loadSchedule(d);
-  }, 300000);
-}
-
-// ===== SSE =====
-function startSSE(){
-  try{
-    const es = new EventSource("/events");
-    es.onmessage = async (ev) => {
+function parsePayload(raw){
+  // normalisasi mirip python kamu
+  if (raw && typeof raw === "object"){
+    if (raw.data && typeof raw.data === "object") raw = raw.data;
+    else if (raw.payload && typeof raw.payload === "object") raw = raw.payload;
+    else if (raw.payload && typeof raw.payload === "string"){
       try{
-        const j = JSON.parse(ev.data);
-        if (j.qty) applyQty(j.qty);
-        if (j.qc) applyQC(j.qc);
-      }catch(e){
-        console.log("SSE parse/apply error", e);
-      }
-    };
-    es.onerror = () => {
-      console.log("SSE error, fallback polling...");
-      es.close();
-      startPolling();
-    };
-    return true;
-  }catch(e){
-    console.log("SSE not available", e);
-    return false;
+        const j2 = JSON.parse(raw.payload);
+        if (j2 && typeof j2 === "object") raw = j2;
+      }catch{}
+    }
   }
+  if (!raw || typeof raw !== "object") return null;
+
+  const up = {};
+  for (const [k,v] of Object.entries(raw)){
+    up[String(k).toUpperCase()] = v;
+  }
+  return up;
 }
 
-// ===== Polling fallback =====
-let pollTimer = null;
-function startPolling(){
-  if (pollTimer) return;
-  pollTimer = setInterval(async () => {
-    try{
-      const qty = await fetchJSON("/api/latest");
-      applyQty(qty);
-    }catch(e){}
+function connectMQTTNext(){
+  if (wsTryIndex >= WS_CANDIDATES.length){
+    console.log("MQTT WS: semua kandidat gagal. Cek port/path WS broker.");
+    const lastUpdate = document.getElementById("lastUpdate");
+    if (lastUpdate) lastUpdate.textContent = "LAST UPDATE: MQTT WS TIDAK CONNECT (cek port)";
+    return;
+  }
 
+  const url = WS_CANDIDATES[wsTryIndex++];
+  console.log("MQTT WS try:", url);
+
+  const lastUpdate = document.getElementById("lastUpdate");
+  if (lastUpdate) lastUpdate.textContent = "CONNECTING WS: " + url;
+
+  let connected = false;
+
+  try{
+    mqttClient = mqtt.connect(url, {
+      clientId: "dash_" + Math.random().toString(16).slice(2),
+      keepalive: 60,
+      reconnectPeriod: 0, // biar kita pindah kandidat
+      connectTimeout: 7000,
+      clean: true,
+    });
+  }catch(e){
+    console.log("mqtt.connect error", e);
+    connectMQTTNext();
+    return;
+  }
+
+  mqttClient.on("connect", () => {
+    connected = true;
+    console.log("MQTT WS connected:", url);
+    if (lastUpdate) lastUpdate.textContent = "CONNECTED: " + url;
+
+    mqttClient.subscribe(TOPIC, { qos: 0 }, (err) => {
+      if (err) console.log("subscribe err", err);
+      else console.log("subscribed", TOPIC);
+    });
+  });
+
+  mqttClient.on("message", (topic, payload) => {
     try{
-      const qc = await fetchJSON("/api/qc/latest");
-      applyQC(qc);
-    }catch(e){}
-  }, 5000);
+      const txt = payload.toString();
+      let raw = JSON.parse(txt);
+      const up = parsePayload(raw);
+      if (!up) return;
+
+      // ambil numeric keys
+      const data = {};
+      let matched = 0;
+      for (const k of NUMERIC_KEYS){
+        if (k in up){
+          let v = up[k];
+          if (typeof v === "string") v = v.trim().replace(",", ".");
+          const n = Number(v);
+          if (isFinite(n)){
+            data[k] = n;
+            matched++;
+          }
+        }
+      }
+      if (matched === 0) return;
+
+      // derived
+      data.SELISIH_FLOW = Number(data.TOTAL_FLOW_ITK||0) - Number(data.TOTAL_FLOW_DST||0);
+
+      applyQtyFromMQTT(data);
+
+    }catch(e){
+      console.log("bad mqtt payload", e);
+    }
+  });
+
+  mqttClient.on("error", (err) => {
+    console.log("MQTT error", url, err?.message || err);
+    try { mqttClient.end(true); } catch {}
+    if (!connected) connectMQTTNext();
+  });
+
+  mqttClient.on("close", () => {
+    console.log("MQTT close", url);
+    if (!connected) connectMQTTNext();
+  });
 }
 
+// ===================== REDRAW =====================
 function redrawAllCharts(){
   setChartDefaults();
 
+  // rebuild tiles qty
   for (const key of qtyTileKeys){
     if (qtyTileCharts[key]) qtyTileCharts[key].destroy();
     qtyTileCharts[key] = null;
     renderQtyTile(key);
   }
 
+  // rebuild tiles qc
   for (const k of qcTileKeys){
     if (qcTileCharts[k]) qcTileCharts[k].destroy();
     qcTileCharts[k] = null;
     renderQCTile(k);
   }
 
+  // gauge+reservoir from current UI
   const p = parseFloat(document.getElementById("val_PRESSURE_DST")?.textContent || "0") || 0;
   const lvl = parseFloat(document.getElementById("val_LVL_RES_WTP3")?.textContent || "0") || 0;
   updatePressureGauge(p, false);
   updateReservoir(lvl, false);
 
-  loadQtyBig(false);
+  // big charts refresh
   loadQCBig(false);
 }
 
-// ======== INIT ========
+// ===================== INIT =====================
 (async function(){
   try{
     initTheme();
@@ -872,27 +1007,25 @@ function redrawAllCharts(){
 
     initQtyTileCharts();
     initQCTileCharts();
+    ensureQtyBigChart();
+    ensureQCBigChart();
 
-    await initQtyTileHistory();
-    await refreshQCTileCharts();
+    // events dropdown update
+    document.getElementById("qtyParam")?.addEventListener("change", () => {
+      // reset big series biar label nyambung
+      qtyBigSeries = { labels: [], data: [], lastBucket: null };
+    });
+    document.getElementById("qcParam")?.addEventListener("change", () => loadQCBig(true));
+    document.getElementById("qcRange")?.addEventListener("change", () => loadQCBig(true));
 
-    await loadQtyBig(false);
-    await loadQCBig(false);
+    // start QC polling
+    await pullQCOnce();
+    setInterval(pullQCOnce, QC_PULL_INTERVAL_MS);
 
-    document.getElementById("qtyParam").addEventListener("change", () => loadQtyBig(true));
-    document.getElementById("qtyRange").addEventListener("change", () => loadQtyBig(true));
-    document.getElementById("qcParam").addEventListener("change", () => loadQCBig(true));
-    document.getElementById("qcRange").addEventListener("change", () => loadQCBig(true));
-
-    try{ applyQty(await fetchJSON("/api/latest")); }catch(e){}
-    try{ applyQC(await fetchJSON("/api/qc/latest")); }catch(e){}
-
-    initSchedule();
-
-    if (!startSSE()) startPolling();
+    // start MQTT
+    connectMQTTNext();
 
   }catch(e){
     console.log("INIT FATAL", e);
-    startPolling();
   }
 })();
