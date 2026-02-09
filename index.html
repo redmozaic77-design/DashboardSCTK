@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>WATER DISTRIBUTION PERFORMANCE & WATER QUALITY DASHBOARD</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body data-theme="dark">
+<div class="topbar">
+  <div class="topbarInner">
+    <img src="{{ url_for('static', filename='logo-sctk-transparan.png') }}" class="brandLogo" alt="Logo" />
+    <span>WATER DISTRIBUTION PERFORMANCE & WATER QUALITY DASHBOARD</span>
+  </div>
+
+  <button id="slideToggle" class="pauseBtn" type="button" title="Pause slide" aria-label="Pause slide">
+    <svg id="slideToggleIcon" viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="currentColor" d="M7 5h3v14H7zM14 5h3v14h-3z"/>
+    </svg>
+  </button>
+
+  <button id="themeToggle" class="themeBtn" type="button">LIGHT</button>
+</div>
+<hr>
+
+<div id="btnPrev" class="slideNavBtn left" title="Slide sebelumnya" aria-label="Slide sebelumnya"><span class="ico">&lt;</span></div>
+<div id="btnNext" class="slideNavBtn right" title="Slide berikutnya" aria-label="Slide berikutnya"><span class="ico">&gt;</span></div>
+
+<div class="slideViewport">
+  <div id="slides" class="slides">
+
+    <!-- ================= SLIDE 1: QC ================= -->
+    <div class="slide" id="slideQC">
+      <div class="sectionTitle">KUALITAS AIR (QC)</div>
+
+      <div class="qcGrid">
+        <div class="card qcCard">
+          <div class="titleRow"><div class="title">KEKERUHAN</div></div>
+          <div class="valueRow"><div class="big"><span id="qc_val_kekeruhan">-</span></div><div class="unit">NTU</div></div>
+          <div class="qcMeta">UPDATE: <span id="qc_dt_kekeruhan">-</span></div>
+          <div class="qcSparkWrap"><canvas class="qcSpark" id="qc_spark_kekeruhan"></canvas></div>
+        </div>
+
+        <div class="card qcCard">
+          <div class="titleRow"><div class="title">WARNA</div></div>
+          <div class="valueRow"><div class="big"><span id="qc_val_warna">-</span></div><div class="unit">TCU</div></div>
+          <div class="qcMeta">UPDATE: <span id="qc_dt_warna">-</span></div>
+          <div class="qcSparkWrap"><canvas class="qcSpark" id="qc_spark_warna"></canvas></div>
+        </div>
+
+        <div class="card qcCard">
+          <div class="titleRow"><div class="title">PH</div></div>
+          <div class="valueRow"><div class="big"><span id="qc_val_ph">-</span></div><div class="unit"></div></div>
+          <div class="qcMeta">UPDATE: <span id="qc_dt_ph">-</span></div>
+          <div class="qcSparkWrap"><canvas class="qcSpark" id="qc_spark_ph"></canvas></div>
+        </div>
+
+        <div class="card qcCard">
+          <div class="titleRow"><div class="title">SISA CHLOR</div></div>
+          <div class="valueRow"><div class="big"><span id="qc_val_sisa_chlor">-</span></div><div class="unit">MG/L</div></div>
+          <div class="qcMeta">UPDATE: <span id="qc_dt_sisa_chlor">-</span></div>
+          <div class="qcSparkWrap"><canvas class="qcSpark" id="qc_spark_sisa_chlor"></canvas></div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:14px;">
+        <div class="panelTitle">
+          <span>GRAFIK KUALITAS AIR (QC)</span>
+          <div class="panelControls">
+            <select id="qcParam" class="dd">
+              <option value="kekeruhan">KEKERUHAN</option>
+              <option value="warna">WARNA</option>
+              <option value="ph">PH</option>
+              <option value="sisa_chlor">SISA CHLOR</option>
+            </select>
+            <select id="qcRange" class="dd">
+              <option value="24">24 JAM</option>
+              <option value="168">7 HARI</option>
+              <option value="720" selected>30 HARI</option>
+            </select>
+          </div>
+        </div>
+        <div class="bigChartWrap"><canvas id="qcBig" class="big"></canvas></div>
+        <div class="hint" id="qcHint">QC LAST UPDATE: - | CHL: -</div>
+      </div>
+
+      <!-- ================= JADWAL (Slide QC) ================= -->
+      <div class="panel schedulePanel">
+        <div class="panelTitle">
+          <div class="panelTitleLeft">
+            <div class="panelIcon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path fill="currentColor" d="M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h1V3a1 1 0 0 1 1-1Zm13 8H4v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-9ZM5 6a1 1 0 0 0-1 1v1h16V7a1 1 0 0 0-1-1H5Z"/>
+              </svg>
+            </div>
+            <span>JADWAL OPERATOR & LAB</span>
+          </div>
+
+          <div class="panelControls">
+            <button class="ddBtn" id="schToday" type="button">HARI INI</button>
+            <button class="ddBtn" id="schTomorrow" type="button">BESOK</button>
+            <input class="dd" id="schDate" type="date" />
+          </div>
+        </div>
+
+        <div class="scheduleWrap">
+          <div class="schBox">
+            <div class="schHead">
+              <div class="schHeadLeft"><span class="badgeDot"></span> OPERATOR PRODUKSI (WTP3)</div>
+            </div>
+            <div class="schTableWrap">
+              <table class="sch">
+                <thead>
+                  <tr><th>NAMA</th><th>JAM</th><th class="lokasi">LOKASI</th></tr>
+                </thead>
+                <tbody id="schBodyOp">
+                  <tr><td class="emptyRow" colspan="3">- Memuat data... -</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="schBox">
+            <div class="schHead">
+              <div class="schHeadLeft"><span class="badgeDot"></span> ANALIS LABORATORIUM (LAB)</div>
+            </div>
+            <div class="schTableWrap">
+              <table class="sch">
+                <thead>
+                  <tr><th>NAMA</th><th>JAM</th><th class="lokasi">LOKASI</th></tr>
+                </thead>
+                <tbody id="schBodyLab">
+                  <tr><td class="emptyRow" colspan="3">- Memuat data... -</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= SLIDE 2: KUANTITAS ================= -->
+    <div class="slide" id="slideQTY">
+      <div class="sectionTitle" style="margin-top:0;">KUANTITAS (FLOW / PRESSURE)</div>
+
+      <div class="grid">
+
+        <div class="card">
+          <div class="titleRow"><div class="title">{{ title_map["PRESSURE_DST"] }}</div></div>
+          <div class="valueRow"><div class="big"><span id="val_PRESSURE_DST">{{ "%.2f"|format(data.get("PRESSURE_DST", 0.0)) }}</span></div><div class="unit">{{ unit_map["PRESSURE_DST"] }}</div></div>
+          <div class="gaugeWrap" id="gaugeWrap"><canvas id="gauge_pressure" width="260" height="150"></canvas></div>
+          <div class="rangeText">RANGE 0 - 5 BAR</div>
+        </div>
+
+        <div class="card">
+          <div class="titleRow"><div class="title">{{ title_map["LVL_RES_WTP3"] }}</div></div>
+          <div class="valueRow">
+            <div class="big"><span id="val_LVL_RES_WTP3">{{ "%.2f"|format(data.get("LVL_RES_WTP3", 0.0)) }}</span></div>
+            <div class="unit">{{ unit_map["LVL_RES_WTP3"] }}</div>
+            <div class="unit">(<span id="pct_LVL">0</span>%)</div>
+          </div>
+
+          <div class="reservoirArea" id="reservoirArea">
+            <div class="yLabels" id="lvl_labels"></div>
+            <div class="tankBox">
+              <div class="tankMajorLines" id="tank_major_lines"></div>
+              <div class="water" id="water_level" style="height:0%"></div>
+              <div class="marker" id="lvl_marker" style="bottom:0%"></div>
+            </div>
+          </div>
+        </div>
+
+        {% for k in display_order %}
+          <div class="card">
+            <div class="titleRow"><div class="title">{{ title_map.get(k, k.replace('_',' ')).upper() }}</div></div>
+            <div class="valueRow"><div class="big"><span id="val_{{ k }}">{{ "%.2f"|format(data.get(k, 0.0)) }}</span></div><div class="unit">{{ unit_map.get(k, "") }}</div></div>
+            <div class="sparkWrap"><canvas class="spark" id="spark_{{ k }}" data-key="{{ k }}"></canvas></div>
+          </div>
+        {% endfor %}
+
+        <div class="card estCard">
+          <div class="estTop">
+            <div class="estTitleSmall">ESTIMASI CADANGAN AIR</div>
+            <div class="estTrend" id="estTrendPill">
+              <span class="trIcon trFlat" id="trendIcon">
+                <svg viewBox="0 0 24 24"><path d="M4 12h16v2H4z"/></svg>
+              </span>
+              <span id="trendText">STABIL</span>
+            </div>
+          </div>
+
+          <div class="estHero">
+            <div class="estHeroLabel" id="est_eta_label">ETA</div>
+            <div class="estHeroValue" id="est_eta_value">-</div>
+          </div>
+
+          <div class="estBar">
+            <div class="estFill" id="est_fill" style="width:0%"></div>
+          </div>
+
+          <div class="estMiniGrid">
+            <div class="estMini">
+              <div class="k">LEVEL</div>
+              <div class="v"><span id="est_level_m">-</span> m</div>
+              <div class="sub"><span id="est_level_pct">-</span>%</div>
+            </div>
+            <div class="estMini">
+              <div class="k">NET (SELISIH)</div>
+              <div class="v"><span id="est_net_lps">-</span> L/s</div>
+              <div class="sub" id="netStateSub">-</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="panel">
+        <div class="panelTitle">
+          <span>GRAFIK KUANTITAS (FLOW / PRESSURE)</span>
+          <div class="panelControls">
+            <select id="qtyParam" class="dd">
+              <option value="TOTAL_FLOW_DST" selected>TOTAL FLOW DISTRIBUSI</option>
+              <option value="TOTAL_FLOW_ITK">TOTAL FLOW INTAKE</option>
+              <option value="SELISIH_FLOW">SELISIH FLOW</option>
+              <option value="FLOW_WTP3">FLOW WTP 3</option>
+              <option value="FLOW_50_WTP1">FLOW UPAM CIKANDE</option>
+              <option value="FLOW_CIJERUK">FLOW UPAM CIJERUK</option>
+              <option value="FLOW_CARENANG">FLOW UPAM CARENANG</option>
+              <option value="PRESSURE_DST">PRESSURE DISTRIBUSI</option>
+              <option value="LVL_RES_WTP3">LEVEL RESERVOIR WTP 3</option>
+            </select>
+            <select id="qtyRange" class="dd">
+              <option value="1" selected>1 JAM</option>
+              <option value="12">12 JAM</option>
+              <option value="24">24 JAM</option>
+            </select>
+          </div>
+        </div>
+        <div class="bigChartWrap"><canvas id="chartBig" class="big"></canvas></div>
+        <div class="hint" id="lastUpdate">LAST UPDATE: -</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  // expose konstanta dari python (opsional kalau mau)
+  window.RES_MAX_M = {{ RES_MAX_M|default(8.0) }};
+  window.RES_LITER_PER_M = {{ RES_LITER_PER_M|default(375000.0) }};
+</script>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
